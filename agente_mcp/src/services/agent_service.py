@@ -7,6 +7,7 @@ from typing import List, Optional
 from langchain.agents import create_agent
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
+from langchain_openai import ChatOpenAI
 from sqlalchemy.orm import Session
 
 from src.repositories.history_repository import HistoryRepository
@@ -19,6 +20,9 @@ from src.utils.environment import (
     LANGFUSE_SECRET_KEY,
     LANGSMITH_API_KEY,
     LANGSMITH_PROJECT,
+    LLM_PROVIDER,
+    OLLAMA_BASE_URL,
+    OLLAMA_MODEL,
     OPENAI_API_KEY,
     OPENAI_MODEL,
 )
@@ -44,8 +48,23 @@ if LANGFUSE_HOST:
 
 SYSTEM_PROMPT = (Path(__file__).parent / "system_prompt.txt").read_text(encoding="utf-8")
 
+
+def _build_model():
+    if LLM_PROVIDER == "ollama":
+        if not OLLAMA_BASE_URL or not OLLAMA_MODEL:
+            raise ValueError("LLM_PROVIDER=ollama requiere OLLAMA_BASE_URL y OLLAMA_MODEL configurados")
+        logger.info("Usando Ollama como LLM", extra={"base_url": OLLAMA_BASE_URL, "model": OLLAMA_MODEL})
+        return ChatOpenAI(
+            model=OLLAMA_MODEL,
+            base_url=f"{OLLAMA_BASE_URL.rstrip('/')}/v1",
+            api_key="ollama",
+        )
+    logger.info("Usando OpenAI como LLM", extra={"model": OPENAI_MODEL})
+    return f"openai:{OPENAI_MODEL}"
+
+
 _agent = create_agent(
-    model=f"openai:{OPENAI_MODEL}",
+    model=_build_model(),
     tools=LOCAL_TOOLS,
     system_prompt=SYSTEM_PROMPT,
 )
@@ -55,7 +74,7 @@ def init_agent(tools: list) -> None:
     """Reinicializa el agente global con el conjunto de tools provisto."""
     global _agent
     _agent = create_agent(
-        model=f"openai:{OPENAI_MODEL}",
+        model=_build_model(),
         tools=tools,
         system_prompt=SYSTEM_PROMPT,
     )
