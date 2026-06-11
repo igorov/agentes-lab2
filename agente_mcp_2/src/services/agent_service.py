@@ -4,10 +4,17 @@ import uuid
 from pathlib import Path
 from typing import List, Optional
 
+from fastapi import HTTPException
 from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from sqlalchemy.orm import Session
 
+from src.services.guardrails import (
+    brand_safety_check,
+    pii_redact,
+    scan_input,
+    scan_output,
+)
 from src.services.prompt import INSTRUCTIONS
 from src.repositories.history_repository import HistoryRepository
 from src.repositories.models.history import History
@@ -80,6 +87,25 @@ class AgentService:
             extra={"session_id": session_id, "trace_id": trace_id, "user": user},
         )
 
+        # --- Guardrail de INPUT (Lab 3 / LLM01) ---
+        injection_scan = scan_input(question)
+        if injection_scan["blocked"]:
+            logger.warning(
+                "Solicitud bloqueada por guardrail de input",
+                extra={"trace_id": trace_id, "reasons": injection_scan["reasons"]},
+            )
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "error": "solicitud_bloqueada",
+                    "message": "Tu solicitud no pudo procesarse por razones de seguridad.",
+                    "trace_id": trace_id,
+                },
+            )
+
+        # Redactar PII del input antes de enviarlo al agente (Lab 4 / LLM02)
+        safe_question = pii_redact(question, apply_to="input")
+
         t0 = time.perf_counter()
         history_records = [] if is_new_session else self._repo.get_by_session_id(session_id, limit=HISTORY_LIMIT)
         t_history = time.perf_counter() - t0
@@ -91,7 +117,7 @@ class AgentService:
 
         t0 = time.perf_counter()
         result = await self._run_agent(
-            question=question,
+            question=safe_question,
             session_id=session_id,
             trace_id=trace_id,
             user=user,
@@ -99,13 +125,36 @@ class AgentService:
         )
         t_agent = time.perf_counter() - t0
 
+        # --- Guardrails de OUTPUT (Lab 3 + Lab 5 / LLM07, LLM09) ---
+        raw_answer: str = result["answer"]
+
+        output_scan = scan_output(raw_answer)
+        if output_scan["blocked"]:
+            logger.warning(
+                "Respuesta bloqueada por guardrail de output",
+                extra={"trace_id": trace_id, "reasons": output_scan["reasons"]},
+            )
+            raw_answer = "Lo siento, no puedo proporcionar esa información."
+
+        brand_check = brand_safety_check(raw_answer)
+        if not brand_check["safe"]:
+            logger.warning(
+                "Respuesta bloqueada por brand safety",
+                extra={"trace_id": trace_id, "violations": brand_check["violations"]},
+            )
+            raw_answer = "Lo siento, no puedo proporcionar esa información."
+
+        # Redactar PII del output antes de devolverlo al usuario (Lab 4 / LLM02)
+        final_answer = pii_redact(raw_answer, apply_to="output")
+
         t0 = time.perf_counter()
+        # Guardamos la pregunta con PII redactado (GDPR: minimización de datos)
         self._repo.save(
             History(
                 trace_id=trace_id,
                 session_id=session_id,
-                question=question,
-                answer=result["answer"],
+                question=safe_question,
+                answer=final_answer,
                 input_tokens=result["input_tokens"],
                 output_tokens=result["output_tokens"],
             )
@@ -125,7 +174,7 @@ class AgentService:
 
         return {
             "user": user,
-            "answer": result["answer"],
+            "answer": final_answer,
             "session_id": session_id,
             "trace_id": trace_id,
         }

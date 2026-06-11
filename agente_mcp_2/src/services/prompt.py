@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
 load_dotenv()
+from src.services.guardrails import build_secure_system_prompt
 
 _project_id = os.getenv("NEON_PROJECT_ID", "")
 _neon_context = (
@@ -17,7 +18,7 @@ _neon_context = (
     f"Para preguntas sobre programas, cursos, horarios, sedes, docentes, matrículas o cualquier información académica, usa retrieve_context en lugar de run_sql. "
 ) if _project_id else ""
 
-INSTRUCTIONS = (
+_BASE_INSTRUCTIONS = (
     "Eres un asistente de voz útil y amigable. Responde siempre en español. "
     "Sé conciso en tus respuestas. "
     "Tienes acceso a herramientas que puedes usar cuando sea necesario: "
@@ -26,3 +27,5 @@ INSTRUCTIONS = (
     + _neon_context +
     "Usa las herramientas directamente cuando las necesites y explica el resultado al usuario."
 )
+
+INSTRUCTIONS = build_secure_system_prompt(_BASE_INSTRUCTIONS)

@@ -68,4 +68,4 @@ app.include_router(router)
 
 if __name__ == "__main__":
     logger.info("Iniciando servidor en puerto 8080")
-    uvicorn.run("src.main:app", host="0.0.0.0", port=8080, reload=False)
+    uvicorn.run("src.main:app", host="0.0.0.0", port=8081, reload=False)
